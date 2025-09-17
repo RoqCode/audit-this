@@ -3,6 +3,7 @@
  * Deep dependency finder for node_modules (direct + transitive, any package manager).
  * Features:
  *  - Scans installed packages (direct + transitive) inside node_modules
+ *  - Reads npm (package-lock.json, npm-shrinkwrap.json), Yarn classic (yarn.lock), and pnpm (pnpm-lock.yaml/.yml) lockfiles
  *  - Matches against name@version (version optional)
  *  - Colored output (disable with --no-color)
  *  - Restrict scan to a subdirectory via --path <dir>
@@ -105,6 +106,7 @@ Options:
   --no-color     Disable ANSI colors in text output
   -p, --path     Restrict scan to a specific subdirectory (e.g. apps/web). Default: current working directory
   -s, --scan     Select data sources: node_modules, lockfile, both. Default: both (option can be repeated or comma-separated)
+                 Lockfile scanning understands package-lock.json, npm-shrinkwrap.json, yarn.lock, and pnpm-lock.yaml/.yml
 `);
     process.exit(0);
   }
