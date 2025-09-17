@@ -82,7 +82,7 @@ function parseSpec(line) {
   if (lastAt > 0) {
     const name = s.slice(0, lastAt);
     const version = s.slice(lastAt + 1).trim();
-    if (version === "") return { name: s, version: null };
+    if (version === "") return { name, version: null };
     return { name, version };
   }
   return { name: s, version: null };
@@ -103,12 +103,19 @@ function isNodeModulesDir(p) {
 function pathHasNodeModules(p) {
   return p.split(path.sep).includes("node_modules");
 }
-async function fileExists(p) {
+
+function isInsideRoot(candidate, root) {
+  const rel = path.relative(root, candidate);
+  if (!rel) return true;
+  if (rel.startsWith("..")) return false;
+  return !path.isAbsolute(rel);
+}
+
+async function safeRealpath(p) {
   try {
-    await fsp.access(p, fs.constants.F_OK);
-    return true;
+    return await fsp.realpath(p);
   } catch {
-    return false;
+    return p;
   }
 }
 
@@ -125,8 +132,20 @@ async function* walkDirs(rootDir) {
     "out",
     "coverage",
   ]);
+  const visited = new Set();
+  const rootReal = await safeRealpath(rootDir);
   while (stack.length) {
     const dir = stack.pop();
+    const realDir = await safeRealpath(dir);
+    if (visited.has(realDir)) continue;
+    visited.add(realDir);
+
+    if (!isInsideRoot(realDir, rootReal)) continue;
+
+    if (isNodeModulesDir(realDir)) {
+      yield realDir;
+    }
+
     let entries;
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -139,12 +158,7 @@ async function* walkDirs(rootDir) {
 
       if (!pathHasNodeModules(full) && ignoredTop.has(e.name)) continue;
 
-      if (isNodeModulesDir(full)) {
-        yield full;
-        stack.push(full);
-      } else {
-        stack.push(full);
-      }
+      stack.push(full);
     }
   }
 }
@@ -177,13 +191,13 @@ async function collectInstalled(rootDir) {
           if (!(se.isDirectory() || se.isSymbolicLink())) continue;
           const pkgDir = path.join(first, se.name);
           const pj = path.join(pkgDir, "package.json");
-          if (await fileExists(pj)) await addPackage(pj, pkgDir, installed);
+          await addPackage(pj, pkgDir, installed);
         }
       } else {
         // Unscoped
         const pkgDir = first;
         const pj = path.join(pkgDir, "package.json");
-        if (await fileExists(pj)) await addPackage(pj, pkgDir, installed);
+        await addPackage(pj, pkgDir, installed);
       }
     }
   }
