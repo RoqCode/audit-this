@@ -1,6 +1,6 @@
 # package-check
 
-Utility script for auditing which dependencies exist in an existing `node_modules` tree. It walks every `node_modules` directory under the working tree (or an optional subpath) and reports whether the packages listed in `packages.txt` are installed, along with the versions that were found.
+Utility script for auditing which dependencies exist in an existing `node_modules` tree *and* which ones are declared inside any `package-lock.json` files. It walks every `node_modules` directory (or an optional subpath) and inspects lockfiles so you can spot both installed and merely declared packages for the entries listed in `packages.txt`.
 
 ## Requirements
 
@@ -9,7 +9,7 @@ Utility script for auditing which dependencies exist in an existing `node_module
 ## Usage
 
 ```
-node find-packages.js -f packages.txt [--json] [--no-color] [--path <dir>]
+node find-packages.js -f packages.txt [--json] [--no-color] [--path <dir>] [--scan <sources>]
 ```
 
 ### Options
@@ -18,6 +18,7 @@ node find-packages.js -f packages.txt [--json] [--no-color] [--path <dir>]
 - `--json` Emit machine-readable JSON that includes the scan summary.
 - `--no-color` Disable ANSI colors in the text report.
 - `-p, --path` Restrict the scan to a project subdirectory (defaults to the current working directory).
+- `-s, --scan` Choose which data sources to inspect. Accepts `node_modules`, `lockfile`, or `both` (comma-separated or passed multiple times). Defaults to scanning both installed packages and lockfiles.
 
 ### Exit codes
 
@@ -44,4 +45,6 @@ Package                Requested  Found   Exact  Installed Versions   One Locati
 @teselagen/react-table 6.10.22    no      no     6.10.19, 6.10.20     ./node_modules/@teselagen/react-table
 
 Summary: 312 packages checked, 280 found (255 exact matches, 32 not found)
+[node_modules] Summary: 300 checked, 270 found (250 exact matches, 30 not found)
+[lockfile] Summary: 312 checked, 280 found (255 exact matches, 32 not found)
 ```
