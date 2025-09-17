@@ -39,6 +39,13 @@ let jsonOut = false;
 let scanPath = null;
 const DEFAULT_SCAN_SOURCES = ["node_modules", "lockfile"];
 const VALID_SCAN_SOURCES = new Set(DEFAULT_SCAN_SOURCES);
+const SUPPORTED_LOCKFILENAMES = new Set([
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "pnpm-lock.yml",
+]);
 const scanSources = new Set(DEFAULT_SCAN_SOURCES);
 let scanSpecified = false;
 
@@ -250,7 +257,7 @@ async function* walkLockfiles(rootDir) {
 
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name === "package-lock.json") {
+      if (entry.isFile() && SUPPORTED_LOCKFILENAMES.has(entry.name)) {
         yield full;
         continue;
       }
@@ -342,46 +349,198 @@ async function collectFromLockfiles(rootDir) {
     } catch {
       continue;
     }
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      continue;
-    }
     const relLock = path.relative(rootDir, lockPath) || path.basename(lockPath);
     const locationPrefix = `lockfile:${relLock}`;
+    const base = path.basename(lockPath);
 
-    if (
-      data &&
-      typeof data === "object" &&
-      data.packages &&
-      typeof data.packages === "object"
-    ) {
-      for (const [pkgPathKey, meta] of Object.entries(data.packages)) {
-        if (!meta || typeof meta !== "object") continue;
-        const { name, version } = meta;
-        const derivedName = name || nameFromPackagePath(pkgPathKey);
-        if (!derivedName || !version) continue;
-        const suffix = pkgPathKey ? pkgPathKey : "root";
-        addFoundPackage(
-          collected,
-          derivedName,
-          version,
-          `${locationPrefix}#${suffix}`,
-        );
+    if (base === "package-lock.json" || base === "npm-shrinkwrap.json") {
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        continue;
       }
+      collectFromNpmLock(data, collected, locationPrefix);
+      continue;
     }
 
-    if (
-      data &&
-      typeof data === "object" &&
-      data.dependencies &&
-      typeof data.dependencies === "object"
-    ) {
-      walkLegacyLockDeps(data.dependencies, collected, locationPrefix, []);
+    if (base === "yarn.lock") {
+      const records = parseYarnLock(raw);
+      for (const entry of records) {
+        addFoundPackage(
+          collected,
+          entry.name,
+          entry.version,
+          `${locationPrefix}#${entry.key}`,
+        );
+      }
+      continue;
+    }
+
+    if (base === "pnpm-lock.yaml" || base === "pnpm-lock.yml") {
+      const records = parsePnpmLock(raw);
+      for (const entry of records) {
+        addFoundPackage(
+          collected,
+          entry.name,
+          entry.version,
+          `${locationPrefix}#${entry.key}`,
+        );
+      }
+      continue;
     }
   }
   return { packages: collected, lockfiles };
+}
+
+function collectFromNpmLock(data, store, locationPrefix) {
+  if (
+    data &&
+    typeof data === "object" &&
+    data.packages &&
+    typeof data.packages === "object"
+  ) {
+    for (const [pkgPathKey, meta] of Object.entries(data.packages)) {
+      if (!meta || typeof meta !== "object") continue;
+      const { name, version } = meta;
+      const derivedName = name || nameFromPackagePath(pkgPathKey);
+      if (!derivedName || !version) continue;
+      const suffix = pkgPathKey ? pkgPathKey : "root";
+      addFoundPackage(store, derivedName, version, `${locationPrefix}#${suffix}`);
+    }
+  }
+
+  if (
+    data &&
+    typeof data === "object" &&
+    data.dependencies &&
+    typeof data.dependencies === "object"
+  ) {
+    walkLegacyLockDeps(data.dependencies, store, locationPrefix, []);
+  }
+}
+
+function parseYarnLock(raw) {
+  const records = [];
+  const lines = raw.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith(" ")) continue;
+    if (!line.endsWith(":")) continue;
+
+    const keySource = line.slice(0, -1).trim();
+    if (!keySource) continue;
+    const selectors = keySource
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!selectors.length) continue;
+
+    let version = null;
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const body = lines[j];
+      if (!body.startsWith("  ")) break;
+      const trimmed = body.trim();
+      if (trimmed.startsWith("version ")) {
+        const match = trimmed.match(/^version\s+"?([^"\s]+)"?/);
+        if (match) version = match[1];
+      }
+    }
+
+    if (version) {
+      for (const selector of selectors) {
+        const name = extractNameFromYarnSelector(selector);
+        if (!name) continue;
+        const key = selector.replace(/^['"]|['"]$/g, "");
+        records.push({ name, version, key });
+      }
+    }
+
+    i = j - 1;
+  }
+  return records;
+}
+
+function extractNameFromYarnSelector(selector) {
+  let s = selector.trim();
+  if (!s) return null;
+  if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1);
+  }
+  if (!s) return null;
+
+  const protocolMatch = s.match(/^(.*)@([a-z][-a-z0-9+]*):/i);
+  if (protocolMatch) {
+    return protocolMatch[1];
+  }
+
+  if (s.startsWith("@")) {
+    const slashIndex = s.indexOf("/");
+    if (slashIndex === -1) return null;
+    const nextAt = s.indexOf("@", slashIndex);
+    if (nextAt === -1) return s;
+    return s.slice(0, nextAt);
+  }
+
+  const atIndex = s.indexOf("@");
+  if (atIndex === -1) return s;
+  return s.slice(0, atIndex);
+}
+
+function parsePnpmLock(raw) {
+  const records = [];
+  const lines = raw.split(/\r?\n/);
+  let inPackages = false;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    if (!line.startsWith(" ")) {
+      inPackages = line.trim() === "packages:";
+      continue;
+    }
+    if (!inPackages) continue;
+    if (!line.startsWith("  ")) continue;
+    const trimmed = line.trim();
+    if (!trimmed.endsWith(":")) continue;
+    const parsed = parsePnpmPackageKey(trimmed.slice(0, -1));
+    if (parsed) records.push(parsed);
+  }
+  return records;
+}
+
+function parsePnpmPackageKey(rawKey) {
+  let key = rawKey.trim();
+  if (!key) return null;
+  if ((key.startsWith("\"") && key.endsWith("\"")) || (key.startsWith("'") && key.endsWith("'"))) {
+    key = key.slice(1, -1);
+  }
+  const locationKey = key;
+  if (key.startsWith("/")) {
+    key = key.replace(/^\/+/, "");
+    if (!key) return null;
+    const parts = key.split("/");
+    if (parts.length < 2) return null;
+    const versionPart = parts[parts.length - 1];
+    if (!versionPart) return null;
+    const underscore = versionPart.indexOf("_");
+    const version = underscore === -1 ? versionPart : versionPart.slice(0, underscore);
+    const name = parts.slice(0, parts.length - 1).join("/");
+    if (!name || !version) return null;
+    return { name, version, key: locationKey };
+  }
+
+  const atIndex = key.lastIndexOf("@");
+  if (atIndex <= 0 || atIndex === key.length - 1) return null;
+  const name = key.slice(0, atIndex);
+  let version = key.slice(atIndex + 1);
+  if (!name || !version) return null;
+  const colonIndex = version.indexOf(":");
+  if (colonIndex !== -1 && colonIndex < version.length - 1) {
+    version = version.slice(colonIndex + 1);
+  }
+  if (!version) return null;
+  return { name, version, key: locationKey };
 }
 
 function mergePackageMaps(target, source) {
