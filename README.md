@@ -1,6 +1,6 @@
-# package-check
+# audit-this
 
-Utility script for auditing which dependencies exist in an existing `node_modules` tree *and* which ones are declared inside supported lockfiles and manifests (`package-lock.json`, `npm-shrinkwrap.json`, `package.json`, `yarn.lock`, `pnpm-lock.yaml`/`.yml`). It walks every `node_modules` directory (or an optional subpath) and inspects those files so you can spot both installed and merely declared packages for the entries listed in `packages.txt`.
+Utility script for auditing which dependencies exist in an existing `node_modules` tree _and_ which ones are declared inside supported lockfiles and manifests (`package-lock.json`, `npm-shrinkwrap.json`, `package.json`, `yarn.lock`, `pnpm-lock.yaml`/`.yml`). It walks every `node_modules` directory (or an optional subpath) and inspects those files so you can spot both installed and merely declared packages for the entries listed in `packages.txt`.
 
 ## Requirements
 
