@@ -51,6 +51,7 @@ const LOCKFILE_PARSERS = new Map([
 const SUPPORTED_LOCKFILENAMES = new Set(LOCKFILE_PARSERS.keys());
 const scanSources = new Set(DEFAULT_SCAN_SOURCES);
 let scanSpecified = false;
+let verbose = false;
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -64,6 +65,10 @@ for (let i = 0; i < args.length; i++) {
   }
   if (a === "--no-color") {
     USE_COLOR = false;
+    continue;
+  }
+  if (a === "--verbose" || a === "-v") {
+    verbose = true;
     continue;
   }
   if ((a === "--path" || a === "-p") && args[i + 1]) {
@@ -100,12 +105,13 @@ for (let i = 0; i < args.length; i++) {
   }
   if (a === "-h" || a === "--help") {
     console.log(`Usage:
-  node find-packages.js -f packages.txt [--json] [--no-color] [--path <dir>] [--scan <sources>]
+  node find-packages.js -f packages.txt [--json] [--no-color] [--path <dir>] [--scan <sources>] [--verbose]
 
 Options:
   -f, --file     Path to the package list file (one line per name@version; version optional)
   --json         Output results as JSON (includes summary)
   --no-color     Disable ANSI colors in text output
+  -v, --verbose  Print the full table of all packages (default shows only matches)
   -p, --path     Restrict scan to a specific subdirectory (e.g. apps/web). Default: current working directory
   -s, --scan     Select data sources: node_modules, lockfile, both. Default: both (option can be repeated or comma-separated)
                  Lockfile scanning understands package-lock.json, npm-shrinkwrap.json, package.json, yarn.lock, and pnpm-lock.yaml/.yml
@@ -730,7 +736,17 @@ function printTable(rows) {
         `Lockfiles: ${lockfilesRel.length ? lockfilesRel.join(", ") : "none"}`,
       );
     }
-    printTable(results);
+    const displayResults = verbose ? results : results.filter((r) => r.found);
+    if (!verbose) {
+      if (displayResults.length) {
+        console.log("Matched packages:");
+        printTable(displayResults);
+      } else {
+        console.log("No matching packages found. Run with --verbose to inspect all entries.");
+      }
+    } else {
+      printTable(displayResults);
+    }
     const { checked, found, exactMatches, notFound } =
       summarizeResults(results);
     console.log("");
