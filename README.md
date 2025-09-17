@@ -1,6 +1,6 @@
 # package-check
 
-Utility script for auditing which dependencies exist in an existing `node_modules` tree *and* which ones are declared inside supported lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`/`.yml`). It walks every `node_modules` directory (or an optional subpath) and inspects those lockfiles so you can spot both installed and merely declared packages for the entries listed in `packages.txt`.
+Utility script for auditing which dependencies exist in an existing `node_modules` tree *and* which ones are declared inside supported lockfiles and manifests (`package-lock.json`, `npm-shrinkwrap.json`, `package.json`, `yarn.lock`, `pnpm-lock.yaml`/`.yml`). It walks every `node_modules` directory (or an optional subpath) and inspects those files so you can spot both installed and merely declared packages for the entries listed in `packages.txt`.
 
 ## Requirements
 
@@ -18,11 +18,11 @@ node find-packages.js -f packages.txt [--json] [--no-color] [--path <dir>] [--sc
 - `--json` Emit machine-readable JSON that includes the scan summary.
 - `--no-color` Disable ANSI colors in the text report.
 - `-p, --path` Restrict the scan to a project subdirectory (defaults to the current working directory).
-- `-s, --scan` Choose which data sources to inspect. Accepts `node_modules`, `lockfile`, or `both` (comma-separated or passed multiple times). Defaults to scanning both installed packages and lockfiles. Lockfile scanning understands `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, and `pnpm-lock.yaml`/`.yml`.
+- `-s, --scan` Choose which data sources to inspect. Accepts `node_modules`, `lockfile`, or `both` (comma-separated or passed multiple times). Defaults to scanning both installed packages and lockfiles. Lockfile scanning understands `package-lock.json`, `npm-shrinkwrap.json`, `package.json`, `yarn.lock`, and `pnpm-lock.yaml`/`.yml`.
 
 ### Lockfile support
 
-- **npm**: `package-lock.json`, `npm-shrinkwrap.json`
+- **npm**: `package-lock.json`, `npm-shrinkwrap.json`, `package.json`
 - **Yarn Classic (v1)**: `yarn.lock`
 - **pnpm**: `pnpm-lock.yaml`, `pnpm-lock.yml`
 

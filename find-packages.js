@@ -3,7 +3,7 @@
  * Deep dependency finder for node_modules (direct + transitive, any package manager).
  * Features:
  *  - Scans installed packages (direct + transitive) inside node_modules
- *  - Reads npm (package-lock.json, npm-shrinkwrap.json), Yarn classic (yarn.lock), and pnpm (pnpm-lock.yaml/.yml) lockfiles
+ *  - Reads npm (package-lock.json, npm-shrinkwrap.json), Yarn classic (yarn.lock), pnpm (pnpm-lock.yaml/.yml) lockfiles, and package.json manifests
  *  - Matches against name@version (version optional)
  *  - Colored output (disable with --no-color)
  *  - Restrict scan to a subdirectory via --path <dir>
@@ -40,13 +40,15 @@ let jsonOut = false;
 let scanPath = null;
 const DEFAULT_SCAN_SOURCES = ["node_modules", "lockfile"];
 const VALID_SCAN_SOURCES = new Set(DEFAULT_SCAN_SOURCES);
-const SUPPORTED_LOCKFILENAMES = new Set([
-  "package-lock.json",
-  "npm-shrinkwrap.json",
-  "yarn.lock",
-  "pnpm-lock.yaml",
-  "pnpm-lock.yml",
+const LOCKFILE_PARSERS = new Map([
+  ["package-lock.json", parseNpmLockfile],
+  ["npm-shrinkwrap.json", parseNpmLockfile],
+  ["package.json", parsePackageManifest],
+  ["yarn.lock", parseYarnLockfile],
+  ["pnpm-lock.yaml", parsePnpmLockfile],
+  ["pnpm-lock.yml", parsePnpmLockfile],
 ]);
+const SUPPORTED_LOCKFILENAMES = new Set(LOCKFILE_PARSERS.keys());
 const scanSources = new Set(DEFAULT_SCAN_SOURCES);
 let scanSpecified = false;
 
@@ -106,7 +108,7 @@ Options:
   --no-color     Disable ANSI colors in text output
   -p, --path     Restrict scan to a specific subdirectory (e.g. apps/web). Default: current working directory
   -s, --scan     Select data sources: node_modules, lockfile, both. Default: both (option can be repeated or comma-separated)
-                 Lockfile scanning understands package-lock.json, npm-shrinkwrap.json, yarn.lock, and pnpm-lock.yaml/.yml
+                 Lockfile scanning understands package-lock.json, npm-shrinkwrap.json, package.json, yarn.lock, and pnpm-lock.yaml/.yml
 `);
     process.exit(0);
   }
@@ -323,23 +325,6 @@ async function addPackageFromNodeModules(pjPath, pkgDir, installed) {
   }
 }
 
-function walkLegacyLockDeps(tree, store, locationPrefix, trail) {
-  if (!tree || typeof tree !== "object") return;
-  for (const [depName, meta] of Object.entries(tree)) {
-    if (!meta || typeof meta !== "object") continue;
-    const version = meta.version;
-    if (!version) continue;
-    const location = `${locationPrefix}#deps/${[...trail, depName].join("/")}`;
-    addFoundPackage(store, depName, version, location);
-    if (meta.dependencies && typeof meta.dependencies === "object") {
-      walkLegacyLockDeps(meta.dependencies, store, locationPrefix, [
-        ...trail,
-        depName,
-      ]);
-    }
-  }
-}
-
 async function collectFromLockfiles(rootDir) {
   const collected = new Map();
   const lockfiles = [];
@@ -354,48 +339,34 @@ async function collectFromLockfiles(rootDir) {
     const relLock = path.relative(rootDir, lockPath) || path.basename(lockPath);
     const locationPrefix = `lockfile:${relLock}`;
     const base = path.basename(lockPath);
+    const parser = LOCKFILE_PARSERS.get(base);
+    if (!parser) continue;
 
-    if (base === "package-lock.json" || base === "npm-shrinkwrap.json") {
-      let data;
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        continue;
-      }
-      collectFromNpmLock(data, collected, locationPrefix);
+    let entries = [];
+    try {
+      entries = parser(raw, locationPrefix) || [];
+    } catch {
       continue;
     }
 
-    if (base === "yarn.lock") {
-      const records = parseYarnLock(raw);
-      for (const entry of records) {
-        addFoundPackage(
-          collected,
-          entry.name,
-          entry.version,
-          `${locationPrefix}#${entry.key}`,
-        );
-      }
-      continue;
-    }
-
-    if (base === "pnpm-lock.yaml" || base === "pnpm-lock.yml") {
-      const records = parsePnpmLock(raw);
-      for (const entry of records) {
-        addFoundPackage(
-          collected,
-          entry.name,
-          entry.version,
-          `${locationPrefix}#${entry.key}`,
-        );
-      }
-      continue;
+    for (const entry of entries) {
+      if (!entry || !entry.name || !entry.version) continue;
+      addFoundPackage(collected, entry.name, entry.version, entry.location);
     }
   }
   return { packages: collected, lockfiles };
 }
 
-function collectFromNpmLock(data, store, locationPrefix) {
+function parseNpmLockfile(raw, locationPrefix) {
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+
+  const entries = [];
+
   if (
     data &&
     typeof data === "object" &&
@@ -408,7 +379,11 @@ function collectFromNpmLock(data, store, locationPrefix) {
       const derivedName = name || nameFromPackagePath(pkgPathKey);
       if (!derivedName || !version) continue;
       const suffix = pkgPathKey ? pkgPathKey : "root";
-      addFoundPackage(store, derivedName, version, `${locationPrefix}#${suffix}`);
+      entries.push({
+        name: derivedName,
+        version,
+        location: `${locationPrefix}#${suffix}`,
+      });
     }
   }
 
@@ -418,11 +393,63 @@ function collectFromNpmLock(data, store, locationPrefix) {
     data.dependencies &&
     typeof data.dependencies === "object"
   ) {
-    walkLegacyLockDeps(data.dependencies, store, locationPrefix, []);
+    collectLegacyLockDeps(data.dependencies, locationPrefix, [], entries);
+  }
+
+  return entries;
+}
+
+function parsePackageManifest(raw, locationPrefix) {
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  const sections = [
+    ["dependencies", "dependencies"],
+    ["devDependencies", "devDependencies"],
+    ["optionalDependencies", "optionalDependencies"],
+    ["peerDependencies", "peerDependencies"],
+  ];
+  const records = [];
+  for (const [field, label] of sections) {
+    const deps = data && typeof data === "object" ? data[field] : null;
+    if (!deps || typeof deps !== "object") continue;
+    for (const [name, versionRaw] of Object.entries(deps)) {
+      if (!name) continue;
+      const version = String(versionRaw || "").trim();
+      if (!version) continue;
+      records.push({
+        name,
+        version,
+        location: `${locationPrefix}#${label}/${name}`,
+      });
+    }
+  }
+  return records;
+}
+
+function collectLegacyLockDeps(tree, locationPrefix, trail, out) {
+  if (!tree || typeof tree !== "object") return;
+  for (const [depName, meta] of Object.entries(tree)) {
+    if (!meta || typeof meta !== "object") continue;
+    const version = meta.version;
+    if (!version) continue;
+    const location = `${locationPrefix}#deps/${[...trail, depName].join("/")}`;
+    out.push({ name: depName, version, location });
+    if (meta.dependencies && typeof meta.dependencies === "object") {
+      collectLegacyLockDeps(
+        meta.dependencies,
+        locationPrefix,
+        [...trail, depName],
+        out,
+      );
+    }
   }
 }
 
-function parseYarnLock(raw) {
+function parseYarnLockfile(raw, locationPrefix) {
   const records = [];
   const lines = raw.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
@@ -456,7 +483,11 @@ function parseYarnLock(raw) {
         const name = extractNameFromYarnSelector(selector);
         if (!name) continue;
         const key = selector.replace(/^['"]|['"]$/g, "");
-        records.push({ name, version, key });
+        records.push({
+          name,
+          version,
+          location: `${locationPrefix}#${key}`,
+        });
       }
     }
 
@@ -468,7 +499,10 @@ function parseYarnLock(raw) {
 function extractNameFromYarnSelector(selector) {
   let s = selector.trim();
   if (!s) return null;
-  if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
     s = s.slice(1, -1);
   }
   if (!s) return null;
@@ -491,7 +525,7 @@ function extractNameFromYarnSelector(selector) {
   return s.slice(0, atIndex);
 }
 
-function parsePnpmLock(raw) {
+function parsePnpmLockfile(raw, locationPrefix) {
   const records = [];
   const lines = raw.split(/\r?\n/);
   let inPackages = false;
@@ -506,7 +540,12 @@ function parsePnpmLock(raw) {
     const trimmed = line.trim();
     if (!trimmed.endsWith(":")) continue;
     const parsed = parsePnpmPackageKey(trimmed.slice(0, -1));
-    if (parsed) records.push(parsed);
+    if (!parsed) continue;
+    records.push({
+      name: parsed.name,
+      version: parsed.version,
+      location: `${locationPrefix}#${parsed.key}`,
+    });
   }
   return records;
 }
@@ -514,7 +553,10 @@ function parsePnpmLock(raw) {
 function parsePnpmPackageKey(rawKey) {
   let key = rawKey.trim();
   if (!key) return null;
-  if ((key.startsWith("\"") && key.endsWith("\"")) || (key.startsWith("'") && key.endsWith("'"))) {
+  if (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
     key = key.slice(1, -1);
   }
   const locationKey = key;
@@ -526,7 +568,8 @@ function parsePnpmPackageKey(rawKey) {
     const versionPart = parts[parts.length - 1];
     if (!versionPart) return null;
     const underscore = versionPart.indexOf("_");
-    const version = underscore === -1 ? versionPart : versionPart.slice(0, underscore);
+    const version =
+      underscore === -1 ? versionPart : versionPart.slice(0, underscore);
     const name = parts.slice(0, parts.length - 1).join("/");
     if (!name || !version) return null;
     return { name, version, key: locationKey };
@@ -618,7 +661,6 @@ function printTable(rows) {
       r.locations[0] || "-",
     ]);
   }
-  // Breite ohne ANSI rechnen
   const widths = lines[0].map((_, i) =>
     Math.max(...lines.map((row) => stripAnsi(row[i]).length)),
   );
