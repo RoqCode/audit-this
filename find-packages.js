@@ -1462,10 +1462,11 @@ function formatLocationMetadata(meta) {
           `(${paint(em, ANSI.blue)} exact matches, ${paint(nf, ANSI.red)} not found)`,
       );
     }
-    if (displayResults.length) {
+    const breakdownResults = displayResults.filter((r) => r.found);
+    if (breakdownResults.length) {
       console.log("");
       console.log("Per-package breakdown:");
-      for (const result of displayResults) {
+      for (const result of breakdownResults) {
         console.log(
           `${paint(result.name, ANSI.bold)} (requested: ${result.requestedVersion})`,
         );
